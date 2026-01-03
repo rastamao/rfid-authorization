@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<title>Авторизация с MQTT индикатором</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<?php include 'head.php'; ?>
+</head>
+<body class="bg-gray-100 flex items-center justify-center min-h-screen font-sans">
+
+<div class="w-full max-w-4xl p-6 bg-white rounded-lg shadow-lg"> <!-- Увеличил max-w-md до 4xl, чтобы кнопки влезли в ряд -->
+    <!-- Этап 1: выбор станции -->
+    <div id="step1">
+        <h2 class="text-3xl font-semibold mb-8 text-center">Выберите станцию</h2>
+        <div class="flex justify-around space-x-6 mb-10">
+            <button onclick="selectStation(1)"
+                    class="w-48 h-48 bg-blue-500 text-white font-bold text-6xl rounded-lg shadow-xl hover:bg-blue-600 transition">
+                1
+            </button>
+            <button onclick="selectStation(2)"
+                    class="w-48 h-48 bg-green-500 text-white font-bold text-6xl rounded-lg shadow-xl hover:bg-green-600 transition">
+                2
+            </button>
+            <button onclick="selectStation(3)"
+                    class="w-48 h-48 bg-purple-500 text-white font-bold text-6xl rounded-lg shadow-xl hover:bg-purple-600 transition">
+                3
+            </button>
+        </div>
+        <!-- Индикатор подключения к MQTT -->
+        <div class="flex items-center justify-center space-x-2">
+            <span class="w-3 h-3 rounded-full" id="mqtt-indicator"></span>
+            <span class="text-gray-600 text-sm" id="mqtt-status-text">Ожидание соединения...</span>
+        </div>
+    </div>
+
+    <!-- Этап 2: ожидание ключа -->
+    <div id="step2" class="hidden mt-6">
+        <h2 class="text-xl font-semibold mb-4 text-center">Приложите ключ</h2>
+        <p class="text-center text-gray-700">Ожидание сообщения по MQTT...</p>
+    </div>
+</div>
+<!-- Блок для логов -->
+<div id="logs" class="mt-4 p-2 max-h-64 overflow-y-auto bg-gray-200 border border-gray-300 rounded"></div>
+
+<script>
+    let mqttClient = null;
+
+    function updateMQTTStatus(isConnected) {
+        const indicator = document.getElementById('mqtt-indicator');
+        const statusText = document.getElementById('mqtt-status-text');
+
+        if (isConnected) {
+            indicator.className = "w-3 h-3 rounded-full bg-green-500";
+            statusText.innerText = "Подключено";
+        } else {
+            indicator.className = "w-3 h-3 rounded-full bg-red-500";
+            statusText.innerText = "Ожидание подключения...";
+        }
+    }
+
+    function selectStation(stationNumber) {
+        document.cookie = "station=" + stationNumber + "; path=/";
+
+        document.getElementById('step1').classList.add('hidden');
+        document.getElementById('step2').classList.remove('hidden');
+
+        startMQTT(stationNumber);
+    }
+
+    function startMQTT(stationNumber) {
+        updateMQTTStatus(false);
+
+        const stationTopic = "station/" + stationNumber;
+        const mqttUrl = "ws://ipaddress:9001";
+
+        mqttClient = mqtt.connect(mqttUrl);
+
+        mqttClient.on('connect', () => {
+            logMessage('Подключено к MQTT');
+            updateMQTTStatus(true);
+            mqttClient.subscribe(stationTopic, (err) => {
+                if (err) {
+                    console.error('Ошибка подписки:', err);
+                }
+            });
+        });
+
+        mqttClient.on('error', (err) => {
+            logMessage('Ошибка MQTT: ' + err, 'error');
+            updateMQTTStatus(false);
+        });
+
+        mqttClient.on('close', () => {
+            logMessage('Соединение разорвано');
+            updateMQTTStatus(false);
+        });
+
+        mqttClient.on('message', (topic, message) => {
+            if (topic === stationTopic) {
+                const id = message.toString();
+                logMessage('Получен ID: ' + id);
+
+                // Отправка только ID в теле POST-запроса как plain text
+                fetch('/check-id.php', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'text/plain'
+                    },
+                    body: id  // Передача только ID
+                })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.name_user) {
+                        document.cookie = "name=" + data.name_user + "; path=/";
+						document.cookie = "level=" + data.level_user + "; path=/";
+						const level_user = data.level_user;
+                        //alert(`Добро пожаловать, ${data.name_user}! Ваш уровень: ${data.level_user}`);
+						window.location.href = "/acceptance.php";
+                    } else {
+                        logMessage('Пользователь не найден по ID: ' + id);
+                    }
+                });
+            }
+        });
+    }
+
+    function logMessage(message, type = 'log') {
+        if (type === 'error') {
+            console.error(message);
+        } else {
+            console.log(message);
+        }
+        const logsDiv = document.getElementById('logs');
+        const msgDiv = document.createElement('div');
+        msgDiv.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+        if (type === 'error') {
+            msgDiv.className = 'text-red-600';
+        } else {
+            msgDiv.className = 'text-gray-800';
+        }
+        logsDiv.appendChild(msgDiv);
+        logsDiv.scrollTop = logsDiv.scrollHeight;
+    }
+</script>
+</body>
+</html>
